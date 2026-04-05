@@ -30,12 +30,12 @@ Vazifang:
 - Avia kargo yetib kelish muddati 7 yoki 10 kun ichida
 - Avto kargo 6$ 
 - Avto kargo yetib kelish mettadi 15 yoki 20 kun ichida
-- Dastafka toshken shari ichida yandex orqali yetkaziladi 
+- Dastafka Toshken shari ichida yandex orqali yetkaziladi 
 - Barcha Viloyatlarga BTS bochta orqali junatiladi
 
 
 Misol javob:
-"Assalomu alaykum! Mahsulotlarimiz haqida to'liq ma'lumot uchun @M_Abdirashidovna ga murojaat qiling. Tez orada to'liq katalogimiz ham chiqadi! 😊"
+"Hurmatli mijoz Mahsulotlarimiz haqida to'liq ma'lumot uchun @M_Abdirashidovna ga murojaat qiling. Tez orada to'liq katalogimiz ham chiqadi! 😊"
 """
 
 client = Groq(api_key=GROQ_API_KEY)
