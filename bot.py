@@ -125,7 +125,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msgs = MESSAGES.get(lang, MESSAGES["uz"])
 
     # Restart / Cancel
-    if text.lower() in ["/start", "restart", "cancel", "bekor", "отмена", "tozalash"]:
+    cancel_words = [
+        "/start", "restart", "cancel", "bekor", "отмена", "tozalash",
+        "clear", "stop", "bekor qil", "bekor qilaman", "cancel order"
+    ]
+
+    if text.lower() in cancel_words or any(word in text.lower() for word in cancel_words):
         context.user_data.clear()
         context.user_data["lang"] = lang
         await update.message.reply_text(msgs["restarted"])
