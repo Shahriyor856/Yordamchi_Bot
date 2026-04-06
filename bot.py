@@ -1,272 +1,237 @@
 import os
+import re
+import asyncio
 from dotenv import load_dotenv
 from groq import Groq
-from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, MessageHandler, CommandHandler,
-    CallbackQueryHandler, filters, ContextTypes
+    ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 )
 
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))  # ← Replace with your Telegram ID from @userinfobot
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 client = Groq(api_key=GROQ_API_KEY)
 
 # ============================================================
-# EXAMPLE PRODUCTS (replace with real ones later)
+# MESSAGES
 # ============================================================
-PRODUCTS = {
-    "dresses": [
-        {"name": "Luna Dress", "price": "$45", "sizes": "S/M/L", "colors": "Black, White", "desc": "Beautiful summer dress"},
-        {"name": "Rose Dress", "price": "$55", "sizes": "M/L/XL", "colors": "Red, Pink", "desc": "Elegant evening dress"},
-    ],
-    "tshirts": [
-        {"name": "Basic Tee", "price": "$20", "sizes": "S/M/L/XL", "colors": "White, Black, Grey", "desc": "Comfortable everyday t-shirt"},
-        {"name": "Floral Tee", "price": "$25", "sizes": "S/M/L", "colors": "Pink, Yellow", "desc": "Pretty floral print t-shirt"},
-    ],
-    "pants": [
-        {"name": "Classic Pants", "price": "$40", "sizes": "S/M/L", "colors": "Black, Beige", "desc": "Stylish everyday pants"},
-        {"name": "Jeans", "price": "$50", "sizes": "S/M/L/XL", "colors": "Blue, Dark Blue", "desc": "Comfortable slim jeans"},
-    ],
-    "skirts": [
-        {"name": "Mini Skirt", "price": "$30", "sizes": "S/M/L", "colors": "Black, White", "desc": "Trendy mini skirt"},
-        {"name": "Maxi Skirt", "price": "$38", "sizes": "S/M/L", "colors": "Floral", "desc": "Flowing maxi skirt"},
-    ],
-    "sale": [
-        {"name": "Summer Dress SALE", "price": "~~$60~~ $35", "sizes": "S/M", "colors": "Yellow", "desc": "Last pieces! Hurry!"},
-        {"name": "Jacket SALE", "price": "~~$80~~ $50", "sizes": "M/L", "colors": "Brown", "desc": "Winter jacket on sale"},
-    ],
+
+MESSAGES = {
+    "uz": {
+        "photo_received": (
+            "✅ Mahsulot rasmi qabul qilindi!\n\n"
+            "Buyurtmani rasmiylashtirish uchun quyidagi ma'lumotlarni ketma-ket kiriting:\n\n"
+            "👤 Ismingizni to'liq kiriting (masalan: Akmal Jabborov):"
+        ),
+        "ask_phone": "📞 Telefon raqamingizni kiriting:\nMisol: +998901234567 yoki 901234567",
+        "ask_location": "📍 Yetkazib berish manzilingizni kiriting (shahar, tuman, ko'cha):",
+        "ask_username": "📱 Telegram username'ingizni kiriting (@ bilan) yoki 'yo'q' deb yozing:",
+
+        "invalid_name": "❌ Ism noto'g'ri! Faqat harflar va bo'shliq bo'lishi kerak. Qayta kiriting:",
+        "invalid_phone": "❌ Telefon raqam noto'g'ri!\nFaqat raqamlar yozing (masalan: +998901234567 yoki 901234567).\nQayta kiriting:",
+        "invalid_username": "❌ Username noto'g'ri! @ bilan boshlanishi kerak yoki 'yo'q' deb yozing. Qayta kiriting:",
+
+        "confirm": (
+            "📋 Buyurtmangizni tekshiring:\n\n"
+            "👤 Ism: {name}\n"
+            "📞 Telefon: {phone}\n"
+            "📍 Manzil: {location}\n"
+            "📱 Username: {username}\n\n"
+            "Hammasi to'g'rimi? **Ha** yoki **Yo'q** deb javob bering."
+        ),
+        "order_accepted": "✅ Buyurtma qabul qilindi!\nAdmin tez orada siz bilan bog'lanadi. Rahmat! 🌸",
+        "order_cancelled": "❌ Buyurtma bekor qilindi.\nYangi buyurtma uchun mahsulot rasmini yuboring.",
+        "already_in_order": "⚠️ Siz allaqachon buyurtma jarayonidasiz.\nBekor qilish uchun /start yoki 'cancel' deb yozing.",
+        "restarted": "🔄 Barcha ma'lumotlar tozalandi.\nYangi buyurtma uchun mahsulot rasmini yuboring."
+    }
 }
 
-# ============================================================
-# MAIN MENU
-# ============================================================
-def main_menu_keyboard():
-    keyboard = [
-        ["🛍 New Collection", "👗 Categories"],
-        ["🔥 Sale", "🛒 My Cart"],
-        ["📦 My Orders", "📞 Contact Admin"],
-        ["⭐ Reviews", "🎁 Discounts"]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+def detect_language(text: str) -> str:
+    if not text:
+        return "uz"
+    text_lower = text.lower()
+    if any(c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя" for c in text_lower):
+        return "ru"
+    if any(w in text_lower for w in ["salom", "rahmat", "iltimos", "kerak", "yo'q", "ha"]):
+        return "uz"
+    return "en" if any(w in text_lower for w in ["hello", "hi", "order"]) else "uz"
 
-def categories_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("👗 Dresses", callback_data="cat_dresses"),
-         InlineKeyboardButton("👕 T-Shirts", callback_data="cat_tshirts")],
-        [InlineKeyboardButton("👖 Pants", callback_data="cat_pants"),
-         InlineKeyboardButton("🩱 Skirts", callback_data="cat_skirts")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+# ====================== BETTER VALIDATION ======================
+def is_valid_phone(phone: str) -> bool:
+    """Accepts almost any Uzbek phone format, ignores letters"""
+    # Remove everything except digits
+    cleaned = re.sub(r'\D', '', phone)
+    # Must have between 9 and 13 digits
+    return 9 <= len(cleaned) <= 13
 
-def product_keyboard(category, index):
-    total = len(PRODUCTS[category])
-    buttons = []
+def is_valid_name(name: str) -> bool:
+    cleaned = name.strip()
+    return len(cleaned) >= 2 and all(c.isalpha() or c.isspace() for c in cleaned)
 
-    nav = []
-    if index > 0:
-        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"prod_{category}_{index-1}"))
-    if index < total - 1:
-        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"prod_{category}_{index+1}"))
-    if nav:
-        buttons.append(nav)
+def is_valid_username(username: str) -> bool:
+    u = username.strip().lower()
+    if u in ["yo'q", "yoq", "нет", "none", "no", "yok"]:
+        return True
+    return username.strip().startswith("@") and len(username.strip()) >= 3
 
-    buttons.append([
-        InlineKeyboardButton("🛒 Add to Cart", callback_data="add_cart"),
-        InlineKeyboardButton("📞 Ask Admin", callback_data="ask_admin")
-    ])
-    buttons.append([InlineKeyboardButton("🔙 Back to Categories", callback_data="back_categories")])
-
-    return InlineKeyboardMarkup(buttons)
+def get_ai_prompt(lang: str) -> str:
+    return f"""You are a helpful assistant for Madina Shop.
+Always reply in {lang} language.
+Be short and polite.
+If user is in the middle of ordering, do not answer general questions.
+Only answer general questions when user is NOT in order process."""
 
 # ============================================================
 # HANDLERS
 # ============================================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.effective_user.first_name
+    context.user_data.clear()
+    lang = detect_language(update.message.text or "")
+    context.user_data["lang"] = lang
     await update.message.reply_text(
-        f"👋 Assalomu alaykum, {name}!\n\n"
-        f"🌸 *Madina Shop* ga xush kelibsiz!\n\n"
-        f"Biz ayollar kiyimlari bo'yicha eng yaxshi tanlovni taqdim etamiz.\n"
-        f"Quyidagi menyudan tanlang 👇",
-        parse_mode="Markdown",
-        reply_markup=main_menu_keyboard()
+        "👋 Assalomu alaykum!\n\n"
+        "Buyurtma berish uchun kanaldan mahsulot rasmini va tavsifini yuboring."
     )
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """New photo always starts fresh order"""
+    lang = detect_language(update.message.caption or "")
+    context.user_data.clear()
+    context.user_data["lang"] = lang
+    context.user_data["state"] = "name"
+    context.user_data["photo_id"] = update.message.photo[-1].file_id
+    context.user_data["caption"] = update.message.caption or "Tavsif yo'q"
+
+    await update.message.reply_text(MESSAGES["uz"]["photo_received"])
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    text = update.message.text.strip()
+    state = context.user_data.get("state")
+    lang = context.user_data.get("lang", "uz")
+    msgs = MESSAGES.get(lang, MESSAGES["uz"])
 
-    if text == "👗 Categories":
-        await update.message.reply_text(
-            "👗 *Kategoriyalardan birini tanlang:*",
-            parse_mode="Markdown",
-            reply_markup=categories_keyboard()
+    # Restart / Cancel
+    if text.lower() in ["/start", "restart", "cancel", "bekor", "отмена", "tozalash"]:
+        context.user_data.clear()
+        context.user_data["lang"] = lang
+        await update.message.reply_text(msgs["restarted"])
+        return
+
+    # ==================== ORDER FLOW ====================
+    if state == "name":
+        if not is_valid_name(text):
+            await update.message.reply_text(msgs["invalid_name"])
+            return
+        context.user_data["order_name"] = text
+        context.user_data["state"] = "phone"
+        await update.message.reply_text(msgs["ask_phone"])
+        return
+
+    if state == "phone":
+        if not is_valid_phone(text):
+            await update.message.reply_text(msgs["invalid_phone"])
+            return
+        context.user_data["order_phone"] = text
+        context.user_data["state"] = "location"
+        await update.message.reply_text(msgs["ask_location"])
+        return
+
+    if state == "location":
+        if len(text.strip()) < 5:
+            await update.message.reply_text("❌ Manzil juda qisqa. Aniqroq yozing:")
+            return
+        context.user_data["order_location"] = text
+        context.user_data["state"] = "username"
+        await update.message.reply_text(msgs["ask_username"])
+        return
+
+    if state == "username":
+        if not is_valid_username(text):
+            await update.message.reply_text(msgs["invalid_username"])
+            return
+        context.user_data["order_username"] = text
+        context.user_data["state"] = "confirm"
+
+        confirm_text = msgs["confirm"].format(
+            name=context.user_data.get("order_name", ""),
+            phone=context.user_data.get("order_phone", ""),
+            location=context.user_data.get("order_location", ""),
+            username=text
         )
+        await update.message.reply_text(confirm_text)
+        return
 
-    elif text == "🛍 New Collection":
-        await update.message.reply_text(
-            "✨ *Yangi kolleksiya!*\n\n"
-            "Eng yangi kiyimlarimiz bilan tanishing!\n"
-            "Kategoriyalar bo'limiga o'ting 👇",
-            parse_mode="Markdown",
-            reply_markup=categories_keyboard()
+    if state == "confirm":
+        if text.lower() in ["ha", "да", "yes", "ok", "tasdiqlash"]:
+            await send_order_to_admin(update, context)
+            context.user_data.clear()
+        else:
+            context.user_data.clear()
+            await update.message.reply_text(msgs["order_cancelled"])
+        return
+
+    # If still in order flow but no matching state
+    if state is not None:
+        await update.message.reply_text(msgs["already_in_order"])
+        return
+
+    # General questions - AI
+    await context.bot.send_chat_action(update.effective_chat.id, "typing")
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": get_ai_prompt(lang)},
+                {"role": "user", "content": text}
+            ],
+            max_tokens=250,
+            temperature=0.5
         )
+        await update.message.reply_text(response.choices[0].message.content)
+    except Exception:
+        await update.message.reply_text("Iltimos, @M_Abdirashidovna ga murojaat qiling.")
 
-    elif text == "🔥 Sale":
-        products = PRODUCTS["sale"]
-        for p in products:
-            await update.message.reply_text(
-                f"🔥 *{p['name']}*\n\n"
-                f"💰 Narx: {p['price']}\n"
-                f"📏 O'lchamlar: {p['sizes']}\n"
-                f"🎨 Ranglar: {p['colors']}\n\n"
-                f"📝 {p['desc']}\n\n"
-                f"Buyurtma uchun: @M_Abdirashidovna",
-                parse_mode="Markdown"
-            )
+async def send_order_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(MESSAGES["uz"]["order_accepted"])
 
-    elif text == "🛒 My Cart":
-        await update.message.reply_text(
-            "🛒 *Savatingiz*\n\n"
-            "Hozircha savatcha bo'sh.\n"
-            "Mahsulot qo'shish uchun kategoriyalarga o'ting!",
-            parse_mode="Markdown"
-        )
-
-    elif text == "📦 My Orders":
-        await update.message.reply_text(
-            "📦 *Mening buyurtmalarim*\n\n"
-            "Hozircha buyurtmalar yo'q.\n"
-            "Buyurtma berish uchun mahsulot tanlang!",
-            parse_mode="Markdown"
-        )
-
-    elif text == "📞 Contact Admin":
-        await update.message.reply_text(
-            "📞 *Admin bilan bog'laning*\n\n"
-            "👤 Admin: @M_Abdirashidovna\n\n"
-            "Ish vaqti: 09:00 - 21:00\n"
-            "Savollar, buyurtmalar va takliflar uchun yozing!",
-            parse_mode="Markdown"
-        )
-
-    elif text == "⭐ Reviews":
-        await update.message.reply_text(
-            "⭐ *Mijozlar fikrlari*\n\n"
-            "❤️ Dilnoza: 'Juda chiroyli ko'ylak, tez yetkazildi!'\n"
-            "❤️ Malika: 'Sifat zo'r, narx ham qulay!'\n"
-            "❤️ Zulfiya: 'Har doim bu do'kondan xarid qilaman!'\n\n"
-            "Siz ham fikr qoldiring: @M_Abdirashidovna",
-            parse_mode="Markdown"
-        )
-
-    elif text == "🎁 Discounts":
-        await update.message.reply_text(
-            "🎁 *Chegirmalar va aksiyalar*\n\n"
-            "🔥 Hozirgi aksiya:\n"
-            "2 ta mahsulot olsangiz — 10% chegirma!\n\n"
-            "🎀 Promo kod: *MADINA10*\n\n"
-            "Buyurtma berishda admin ga yuboring: @M_Abdirashidovna",
-            parse_mode="Markdown"
-        )
-
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data == "back_main":
-        await query.message.reply_text(
-            "🏠 Asosiy menyu:",
-            reply_markup=main_menu_keyboard()
-        )
-
-    elif data == "back_categories":
-        await query.message.reply_text(
-            "👗 Kategoriyalardan birini tanlang:",
-            reply_markup=categories_keyboard()
-        )
-
-    elif data.startswith("cat_"):
-        category = data.replace("cat_", "")
-        await show_product(query, category, 0)
-
-    elif data.startswith("prod_"):
-        _, category, index = data.split("_")
-        await show_product(query, category, int(index))
-
-    elif data == "add_cart":
-        await query.message.reply_text(
-            "🛒 Mahsulot savatchaga qo'shildi!\n\n"
-            "Buyurtma berish uchun: @M_Abdirashidovna"
-        )
-
-    elif data == "ask_admin":
-        await query.message.reply_text(
-            "📞 Admin: @M_Abdirashidovna\n"
-            "Savol yoki buyurtma uchun yozing!"
-        )
-
-async def show_product(query, category, index):
-    products = PRODUCTS[category]
-    p = products[index]
-    total = len(products)
-
-    cat_names = {
-        "dresses": "👗 Ko'ylaklar",
-        "tshirts": "👕 Futbolkalar",
-        "pants": "👖 Shimlar",
-        "skirts": "🩱 Yubkalar",
-        "sale": "🔥 Sale"
-    }
-
-    text = (
-        f"{cat_names.get(category, category)} — {index+1}/{total}\n\n"
-        f"👗 *{p['name']}*\n\n"
-        f"💰 Narx: {p['price']}\n"
-        f"📏 O'lchamlar: {p['sizes']}\n"
-        f"🎨 Ranglar: {p['colors']}\n\n"
-        f"📝 {p['desc']}"
+    admin_text = (
+        f"🛍 *YANGI BUYURTMA!*\n\n"
+        f"👤 Ism: {context.user_data.get('order_name', '—')}\n"
+        f"📞 Telefon: {context.user_data.get('order_phone', '—')}\n"
+        f"📍 Manzil: {context.user_data.get('order_location', '—')}\n"
+        f"📱 Username: {context.user_data.get('order_username', '—')}\n\n"
+        f"📦 Mahsulot tavsifi:\n{context.user_data.get('caption', '—')}"
     )
 
-    await query.message.reply_text(
-        text,
-        parse_mode="Markdown",
-        reply_markup=product_keyboard(category, index)
-    )
-
-# ============================================================
-# ADMIN COMMANDS
-# ============================================================
-async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    await update.message.reply_text(f"📊 Bot ishlayapti!\n👥 Foydalanuvchilar: faol")
-
-async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    message = " ".join(context.args)
-    if not message:
-        await update.message.reply_text("Usage: /broadcast Your message")
-        return
-    await update.message.reply_text(f"✅ Xabar yuborildi: {message}")
+    if context.user_data.get("photo_id"):
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=context.user_data["photo_id"],
+            caption=admin_text,
+            parse_mode="Markdown"
+        )
 
 # ============================================================
 # MAIN
 # ============================================================
+
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    async def main():
+        app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", admin_stats))
-    app.add_handler(CommandHandler("broadcast", admin_broadcast))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("✅ Madina Shop Bot is running!")
-    app.run_polling()
+        print("✅ Madina Shop Bot (phone validation fixed) is running!")
+        async with app:
+            await app.start()
+            await app.updater.start_polling()
+            await asyncio.Event().wait()
+
+    asyncio.run(main())
